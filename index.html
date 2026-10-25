@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>Camera Mirror</title>
+<style>
+  :root { --bg:#000; --fg:#f2f2f2; --sub:#9a9a9a; --panel:rgba(20,20,20,.78); --accent:#4da3ff; --line:#333; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif; overflow:hidden; }
+  section[hidden] { display:none !important; }
+  button, select, input { font:inherit; color:var(--fg); background:#1c1c1c; border:1px solid var(--line);
+    border-radius:12px; padding:12px 16px; min-height:48px; }
+  button:active { background:#2a2a2a; }
+  .primary { background:var(--accent); border-color:var(--accent); color:#000; font-weight:600; }
+
+  /* Home */
+  #home { height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:20px; padding:16px; }
+  #home h1 { font-weight:600; margin:0 0 8px; }
+  #home button { width:min(360px,100%); font-size:18px; padding:20px; }
+  #home p { color:var(--sub); font-size:14px; text-align:center; margin:0; }
+
+  /* Camera side */
+  #cam { height:100%; position:relative; }
+  #camVideo { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; transform:scaleX(-1); }
+  #camVideo.back { transform:none; }
+  #camBlank { position:absolute; inset:0; background:#000; display:none; }
+  #cam.blank #camBlank { display:block; }
+  #camPanel { position:absolute; left:50%; bottom:max(16px,env(safe-area-inset-bottom)); transform:translateX(-50%);
+    background:var(--panel); border-radius:18px; padding:16px; display:flex; flex-wrap:wrap; gap:10px;
+    align-items:center; justify-content:center; width:min(720px,calc(100% - 32px)); backdrop-filter:blur(8px); }
+  #codeBox { width:100%; text-align:center; }
+  #code { font-size:56px; font-weight:700; letter-spacing:.15em; font-variant-numeric:tabular-nums; }
+  .status { width:100%; text-align:center; color:var(--sub); font-size:14px; }
+
+  /* Viewer side */
+  #view { height:100%; position:relative; }
+  #joinForm { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:16px; }
+  #joinForm input { font-size:40px; text-align:center; letter-spacing:.2em; width:min(280px,100%); }
+  #remote { position:fixed; top:50%; left:50%; width:100vw; height:100vh; height:100dvh; object-fit:contain;
+    transform:translate(-50%,-50%) var(--rot,rotate(0deg)) var(--flip,scaleX(-1)); background:#000; }
+  #remote.r90 { width:100vh; width:100dvh; height:100vw; }
+  #remote.cover { object-fit:cover; }
+  #viewBar { position:fixed; left:0; right:0; bottom:0; display:flex; flex-wrap:wrap; gap:8px; justify-content:center;
+    padding:12px 16px max(12px,env(safe-area-inset-bottom)); background:linear-gradient(transparent,rgba(0,0,0,.85));
+    transition:opacity .3s; }
+  #viewBar.hide { opacity:0; pointer-events:none; }
+  #viewBar button { background:var(--panel); }
+  #stats { position:fixed; top:max(8px,env(safe-area-inset-top)); left:8px; font:12px/1.4 ui-monospace,monospace;
+    background:rgba(0,0,0,.6); padding:6px 8px; border-radius:8px; white-space:pre; display:none; }
+  #stats.on { display:block; }
+  #viewStatus { position:fixed; top:50%; left:0; right:0; text-align:center; color:var(--sub); pointer-events:none; }
+</style>
+</head>
+<body>
+
+<section id="home">
+  <h1>Camera Mirror</h1>
+  <button class="primary" id="goCam">📷 カメラ側（iPad）</button>
+  <button id="goView">🪞 表示側（Pixel）</button>
+  <p>両方の端末を同じWi-Fiにつないでください</p>
+</section>
+
+<section id="cam" hidden>
+  <video id="camVideo" autoplay playsinline muted></video>
+  <div id="camBlank"></div>
+  <div id="camPanel">
+    <div id="codeBox"><div class="status">接続コード</div><div id="code">----</div></div>
+    <button id="flipCam">カメラ切替</button>
+    <select id="quality">
+      <option value="4k">4K（最高画質）</option>
+      <option value="1080">1080p（推奨）</option>
+      <option value="720">720p（軽量）</option>
+    </select>
+    <button id="blankBtn">プレビューを隠す</button>
+    <div class="status" id="camStatus">準備中…</div>
+  </div>
+</section>
+
+<section id="view" hidden>
+  <form id="joinForm">
+    <div>iPadに表示されたコードを入力</div>
+    <input id="codeInput" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off">
+    <button class="primary" type="submit">接続</button>
+  </form>
+  <video id="remote" autoplay playsinline muted hidden></video>
+  <div id="viewStatus"></div>
+  <div id="stats"></div>
+  <div id="viewBar" hidden>
+    <button id="mirrorBtn">左右反転</button>
+    <button id="rotBtn">回転</button>
+    <button id="fitBtn">全面表示</button>
+    <button id="remoteFlip">カメラ切替</button>
+    <button id="statsBtn">情報</button>
+    <button id="fsBtn">全画面</button>
+  </div>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+const PREFIX = 'cammirror-a7f3-';
+const QUALITY = {
+  '4k':   { w: 3840, h: 2160, bps: 30e6 },
+  '1080': { w: 1920, h: 1080, bps: 15e6 },
+  '720':  { w: 1280, h: 720,  bps: 6e6 },
+};
+const $ = s => document.querySelector(s);
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+function show(id) { for (const s of document.querySelectorAll('body > section')) s.hidden = s.id !== id; }
+
+// Keep the screen on for both sides.
+let wakeWanted = false;
+async function keepAwake() {
+  wakeWanted = true;
+  try { await navigator.wakeLock?.request('screen'); } catch {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (wakeWanted && document.visibilityState === 'visible') keepAwake();
+});
+
+// ---------------- Camera side ----------------
+let stream, peer;
+let facing = store.get('facing') || 'user';
+let quality = store.get('quality') || '1080';
+const calls = new Set();
+
+function camCode() {
+  let c = store.get('code');
+  if (!c) { c = String(1000 + Math.floor(Math.random() * 9000)); store.set('code', c); }
+  return c;
+}
+
+async function startCamera() {
+  stream?.getTracks().forEach(t => t.stop());
+  const q = QUALITY[quality];
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: { facingMode: facing, width: { ideal: q.w }, height: { ideal: q.h }, frameRate: { ideal: 30 } },
+  });
+  const track = stream.getVideoTracks()[0];
+  track.contentHint = 'detail'; // favour sharpness over motion smoothness
+  $('#camVideo').srcObject = stream;
+  $('#camVideo').classList.toggle('back', facing !== 'user');
+  for (const call of calls) {
+    const sender = call.peerConnection?.getSenders().find(s => !s.track || s.track.kind === 'video');
+    if (sender) { await sender.replaceTrack(track); tune(call.peerConnection); }
+  }
+  updateCamStatus();
+}
+
+function updateCamStatus(msg) {
+  const s = stream?.getVideoTracks()[0]?.getSettings() || {};
+  const res = s.width ? `${s.width}×${s.height} / ${Math.round(s.frameRate || 0)}fps` : '';
+  const conn = calls.size ? `表示中（${calls.size}台）` : '表示側の接続待ち';
+  $('#camStatus').textContent = msg || `${conn}　${res}`;
+}
+
+async function tune(pc) {
+  for (const sender of pc.getSenders()) {
+    if (sender.track?.kind !== 'video') continue;
+    const p = sender.getParameters();
+    if (!p.encodings?.length) p.encodings = [{}];
+    p.encodings[0].maxBitrate = QUALITY[quality].bps;
+    p.encodings[0].maxFramerate = 30;
+    p.encodings[0].scaleResolutionDownBy = 1;
+    p.degradationPreference = 'maintain-resolution';
+    try { await sender.setParameters(p); }
+    catch {
+      delete p.degradationPreference; // not supported everywhere
+      try { await sender.setParameters(p); } catch (e) { console.warn('setParameters', e); }
+    }
+  }
+}
+
+function hookCall(call, conn) {
+  calls.add(call);
+  const pc = call.peerConnection;
+  const onState = () => {
+    if (pc.connectionState === 'connected' || pc.iceConnectionState === 'connected') tune(pc);
+    if (['failed', 'closed'].includes(pc.connectionState)) drop();
+  };
+  const drop = () => { calls.delete(call); updateCamStatus(); };
+  pc.addEventListener('connectionstatechange', onState);
+  pc.addEventListener('iceconnectionstatechange', onState);
+  call.on('close', drop);
+  conn.on('close', () => { call.close(); drop(); });
+  updateCamStatus();
+}
+
+function startCamPeer() {
+  const code = camCode();
+  $('#code').textContent = code;
+  peer = new Peer(PREFIX + code);
+  peer.on('open', () => updateCamStatus());
+  peer.on('connection', conn => {
+    conn.on('open', () => hookCall(peer.call(conn.peer, stream), conn));
+    conn.on('data', async msg => {
+      if (msg?.type === 'flip') { facing = facing === 'user' ? 'environment' : 'user'; store.set('facing', facing); await startCamera(); }
+      conn.send({ type: 'facing', facing });
+    });
+  });
+  peer.on('disconnected', () => setTimeout(() => !peer.destroyed && peer.reconnect(), 1500));
+  peer.on('error', e => {
+    if (e.type === 'unavailable-id') {
+      // A previous session may still hold the code on the signalling server for a short while.
+      updateCamStatus('コードを確保中…（数十秒かかることがあります）');
+      peer.destroy();
+      setTimeout(startCamPeer, 4000);
+    } else {
+      updateCamStatus('エラー: ' + e.type);
+    }
+  });
+}
+
+async function enterCamera() {
+  show('cam');
+  location.hash = 'cam';
+  $('#quality').value = quality;
+  keepAwake();
+  try { await startCamera(); }
+  catch (e) { updateCamStatus('カメラを起動できません: ' + e.name); return; }
+  startCamPeer();
+}
+
+$('#flipCam').onclick = async () => {
+  facing = facing === 'user' ? 'environment' : 'user';
+  store.set('facing', facing);
+  await startCamera();
+};
+$('#quality').onchange = async e => { quality = e.target.value; store.set('quality', quality); await startCamera(); };
+$('#blankBtn').onclick = () => {
+  const on = $('#cam').classList.toggle('blank');
+  $('#blankBtn').textContent = on ? 'プレビューを表示' : 'プレビューを隠す';
+};
+
+// ---------------- Viewer side ----------------
+let vPeer, vConn, vCall, retryTimer, statsTimer;
+let mirror = store.get('mirror') !== '0';
+let rot = Number(store.get('rot') || 0);
+let cover = store.get('cover') === '1';
+const remote = $('#remote');
+
+function setViewStatus(t) { $('#viewStatus').textContent = t; }
+
+function applyView() {
+  remote.style.setProperty('--flip', mirror ? 'scaleX(-1)' : 'scaleX(1)');
+  remote.style.setProperty('--rot', `rotate(${rot}deg)`);
+  remote.classList.toggle('r90', rot % 180 !== 0);
+  remote.classList.toggle('cover', cover);
+  $('#fitBtn').textContent = cover ? '全体表示' : '全面表示';
+}
+
+function scheduleRetry(code) {
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(() => connectViewer(code), 2500);
+}
+
+function connectViewer(code) {
+  clearTimeout(retryTimer);
+  vConn?.close(); vCall?.close();
+  setViewStatus('接続中…');
+  const open = () => {
+    vConn = vPeer.connect(PREFIX + code, { reliable: true });
+    vConn.on('close', () => { setViewStatus('切断されました。再接続中…'); scheduleRetry(code); });
+  };
+  if (vPeer && !vPeer.destroyed && vPeer.open) return open();
+  vPeer?.destroy();
+  vPeer = new Peer();
+  vPeer.on('open', open);
+  vPeer.on('call', call => {
+    vCall = call;
+    call.answer();
+    call.on('stream', s => {
+      remote.srcObject = s;
+      remote.hidden = false;
+      remote.play().catch(() => {});
+      setViewStatus('');
+      startStats(call.peerConnection);
+    });
+    call.on('close', () => scheduleRetry(code));
+  });
+  vPeer.on('error', e => {
+    setViewStatus(e.type === 'peer-unavailable' ? 'カメラ側が見つかりません。再試行中…' : 'エラー: ' + e.type);
+    scheduleRetry(code);
+  });
+  vPeer.on('disconnected', () => setTimeout(() => !vPeer.destroyed && vPeer.reconnect(), 1500));
+}
+
+function startStats(pc) {
+  clearInterval(statsTimer);
+  let lastBytes = 0, lastTs = 0;
+  statsTimer = setInterval(async () => {
+    if (!$('#stats').classList.contains('on')) return;
+    const report = await pc.getStats();
+    let inb, codec;
+    report.forEach(r => { if (r.type === 'inbound-rtp' && r.kind === 'video') inb = r; });
+    if (!inb) return;
+    if (inb.codecId) codec = report.get(inb.codecId)?.mimeType;
+    const mbps = lastTs ? ((inb.bytesReceived - lastBytes) * 8 / ((inb.timestamp - lastTs) / 1000) / 1e6).toFixed(1) : '-';
+    lastBytes = inb.bytesReceived; lastTs = inb.timestamp;
+    $('#stats').textContent =
+      `${inb.frameWidth}×${inb.frameHeight}  ${Math.round(inb.framesPerSecond || 0)}fps\n${mbps} Mbps  ${codec || ''}`;
+  }, 1000);
+}
+
+function enterViewer(code) {
+  show('view');
+  applyView();
+  keepAwake();
+  if (code) return join(code);
+  $('#codeInput').value = store.get('lastCode') || '';
+  $('#codeInput').focus();
+}
+
+function join(code) {
+  store.set('lastCode', code);
+  location.hash = 'view=' + code;
+  $('#joinForm').hidden = true;
+  $('#viewBar').hidden = false;
+  autoHideBar();
+  connectViewer(code);
+}
+
+$('#joinForm').onsubmit = e => {
+  e.preventDefault();
+  const code = $('#codeInput').value.trim();
+  if (/^\d{4}$/.test(code)) join(code);
+};
+
+let hideTimer;
+function autoHideBar() {
+  $('#viewBar').classList.remove('hide');
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(() => $('#viewBar').classList.add('hide'), 3500);
+}
+$('#view').addEventListener('click', e => { if (!$('#joinForm').hidden) return; autoHideBar(); e.stopPropagation(); });
+
+$('#mirrorBtn').onclick = () => { mirror = !mirror; store.set('mirror', mirror ? '1' : '0'); applyView(); };
+$('#rotBtn').onclick = () => { rot = (rot + 90) % 360; store.set('rot', rot); applyView(); };
+$('#fitBtn').onclick = () => { cover = !cover; store.set('cover', cover ? '1' : '0'); applyView(); };
+$('#remoteFlip').onclick = () => vConn?.open && vConn.send({ type: 'flip' });
+$('#statsBtn').onclick = () => $('#stats').classList.toggle('on');
+$('#fsBtn').onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen?.().catch(() => {});
+};
+
+// ---------------- Routing ----------------
+$('#goCam').onclick = enterCamera;
+$('#goView').onclick = () => enterViewer();
+const h = location.hash.slice(1);
+if (h === 'cam') enterCamera();
+else if (h.startsWith('view=')) enterViewer(h.slice(5));
+</script>
+</body>
+</html>
